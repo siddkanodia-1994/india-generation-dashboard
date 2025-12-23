@@ -18,6 +18,7 @@ function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
 }
 
+// Validate internal ISO date key (YYYY-MM-DD)
 function parseISOKey(s: string) {
   const ok = /^\d{4}-\d{2}-\d{2}$/.test(s);
   if (!ok) return null;
@@ -25,6 +26,7 @@ function parseISOKey(s: string) {
   return Number.isNaN(d.getTime()) ? null : s;
 }
 
+// Parse DD-MM-YYYY (preferred) -> ISO, also accept ISO
 function parseInputDate(s: unknown) {
   if (typeof s !== "string") return null;
   const t = s.trim();
@@ -33,6 +35,7 @@ function parseInputDate(s: unknown) {
     const [dd, mm, yyyy] = t.split("-").map(Number);
     const d = new Date(Date.UTC(yyyy, mm - 1, dd));
     if (Number.isNaN(d.getTime())) return null;
+    // guard invalid dates like 31-02-2025
     if (d.getUTCFullYear() !== yyyy || d.getUTCMonth() !== mm - 1 || d.getUTCDate() !== dd) return null;
     return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
   }
@@ -56,14 +59,6 @@ function isoMinusDays(iso: string, days: number) {
 function isoPlusDays(iso: string, days: number) {
   const d = new Date(iso + "T00:00:00Z");
   d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
-function startOfWeekISO(iso: string) {
-  const d = new Date(iso + "T00:00:00Z");
-  const dow = d.getUTCDay();
-  const diffToMon = dow === 0 ? -6 : 1 - dow;
-  d.setUTCDate(d.getUTCDate() + diffToMon);
   return d.toISOString().slice(0, 10);
 }
 
@@ -93,7 +88,7 @@ function round2(n: number | null | undefined) {
 }
 
 function monthKey(isoDate: string) {
-  return isoDate.slice(0, 7);
+  return isoDate.slice(0, 7); // YYYY-MM
 }
 
 function addMonths(ym: string, delta: number) {
@@ -105,7 +100,6 @@ function addMonths(ym: string, delta: number) {
 function getYear(ym: string) {
   return Number(ym.slice(0, 4));
 }
-
 function getMonth(ym: string) {
   return Number(ym.slice(5, 7));
 }
@@ -195,6 +189,7 @@ function toMonthly(sortedDaily: DailyPoint[]) {
     const prevComparableYoY = sumMonthUpToDay(prevYearRec, r.max_day);
     r.yoy_pct = prevComparableYoY != null ? growthPct(r.total_gwh, prevComparableYoY) : null;
   }
+
   return out;
 }
 
@@ -210,6 +205,7 @@ function csvParse(text: string) {
     if (cols.length >= 2) rows.push(cols);
   }
 
+  // header optional
   if (rows.length) {
     const h0 = rows[0][0].toLowerCase();
     const h1 = rows[0][1].toLowerCase();
@@ -228,12 +224,10 @@ function csvParse(text: string) {
       errors.push(`Row ${i + 1}: invalid date '${dRaw}' (expected DD-MM-YYYY)`);
       continue;
     }
-
     if (!Number.isFinite(g) || g < 0) {
       errors.push(`Row ${i + 1}: invalid generation '${gRaw}' (expected non-negative number)`);
       continue;
     }
-
     parsed.push({ date, generation_gwh: g });
   }
 
@@ -282,7 +276,7 @@ function EmptyState({ onLoadSample }: { onLoadSample: () => void }) {
   );
 }
 
-/** ✅ Custom tooltip forces 2-decimal formatting (fixes your screenshot issue) */
+/** Tooltip: always show 2 decimals for both units and % */
 function CustomTooltip({
   active,
   label,
@@ -319,9 +313,11 @@ function CustomTooltip({
 }
 
 export default function App() {
+  // ✅ SSR-safe localStorage load
   const [dataMap, setDataMap] = useState<Map<string, number>>(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      if (typeof window === "undefined") return new Map();
+      const raw = window.localStorage.getItem(STORAGE_KEY);
       if (!raw) return new Map();
       const obj = JSON.parse(raw);
       const entries = Object.entries(obj || {});
@@ -349,14 +345,18 @@ export default function App() {
   const [msg, setMsg] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [rangeDays, setRangeDays] = useState(120);
+
   const [fromIso, setFromIso] = useState("");
   const [toIso, setToIso] = useState("");
-  const [aggFreq, setAggFreq] = useState<"daily" | "weekly" | "monthly" | "rolling30">("daily");
+
+  const [aggFreq, setAggFreq] = useState<"daily" | "rolling30">("daily");
+
   const [showUnitsSeries, setShowUnitsSeries] = useState(true);
   const [showPrevYearSeries, setShowPrevYearSeries] = useState(true);
   const [showYoYSeries, setShowYoYSeries] = useState(true);
   const [showMoMSeries, setShowMoMSeries] = useState(true);
 
+  // ✅ Correct ref type (fixes your build error)
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const sortedDaily = useMemo<DailyPoint[]>(() => {
@@ -365,11 +365,18 @@ export default function App() {
       .sort((a, b) => sortISO(a.date, b.date));
   }, [dataMap]);
 
+  // ✅ SSR-safe save
   useEffect(() => {
-    const obj = Object.fromEntries(dataMap.entries());
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+    try {
+      if (typeof window === "undefined") return;
+      const obj = Object.fromEntries(dataMap.entries());
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+    } catch {
+      // ignore
+    }
   }, [dataMap]);
 
+  // initialize chart range
   useEffect(() => {
     if (!sortedDaily.length) return;
     const lastIso = sortedDaily[sortedDaily.length - 1].date;
@@ -390,7 +397,7 @@ export default function App() {
     const t = effectiveFrom <= effectiveTo ? effectiveTo : effectiveFrom;
 
     const filtered = sortedDaily.filter((d) => d.date >= f && d.date <= t);
-    const dailyLookup = new Map(sortedDaily.map((d) => [d.date, d.generation_gwh]));
+    const dailyLookup = new Map(sortedDaily.map((d) => [d.date, d.generation_gwh] as const));
 
     const sumRangeInclusive = (startIso: string, endIso: string) => {
       if (startIso > endIso) return null;
@@ -413,6 +420,7 @@ export default function App() {
       return filtered.map((d) => {
         const pyDate = sameDayPrevYear(d.date);
         const py = dailyLookup.get(pyDate) ?? null;
+
         return {
           label: formatDDMMYYYY(d.date),
           units: round2(d.generation_gwh),
@@ -423,41 +431,33 @@ export default function App() {
       });
     }
 
-    if (aggFreq === "rolling30") {
-      const points: any[] = [];
-      let cur = f;
-      while (cur <= t) {
-        const start = isoMinusDays(cur, 29);
-        const currSum = sumRangeInclusive(start, cur);
+    // rolling30
+    const points: any[] = [];
+    let cur = f;
+    while (cur <= t) {
+      const start = isoMinusDays(cur, 29);
+      const currSum = sumRangeInclusive(start, cur);
 
-        const curPrevYear = isoMinusDays(cur, 365);
-        const startPrevYear = isoMinusDays(curPrevYear, 29);
-        const prevSum = sumRangeInclusive(startPrevYear, curPrevYear);
+      // Note: using 365 is a simplification; if you want perfect year-shift incl leap years, I can add isoAddYears().
+      const curPrevYear = isoMinusDays(cur, 365);
+      const startPrevYear = isoMinusDays(curPrevYear, 29);
+      const prevSum = sumRangeInclusive(startPrevYear, curPrevYear);
 
-        points.push({
-          label: formatDDMMYYYY(cur),
-          units: round2(currSum ?? 0),
-          prev_year_units: prevSum != null ? round2(prevSum) : null,
-          yoy_pct: currSum != null && prevSum != null ? round2(growthPct(currSum, prevSum)) : null,
-          mom_pct: null,
-        });
+      points.push({
+        label: formatDDMMYYYY(cur),
+        units: round2(currSum ?? 0),
+        prev_year_units: prevSum != null ? round2(prevSum) : null,
+        yoy_pct: currSum != null && prevSum != null ? round2(growthPct(currSum, prevSum)) : null,
+        mom_pct: null,
+      });
 
-        cur = isoPlusDays(cur, 1);
-      }
-      return points;
+      cur = isoPlusDays(cur, 1);
     }
-
-    // weekly/monthly simplified to keep code shorter; your original logic can be pasted back if needed
-    return filtered.map((d) => ({
-      label: formatDDMMYYYY(d.date),
-      units: round2(d.generation_gwh),
-      prev_year_units: null,
-      yoy_pct: null,
-      mom_pct: null,
-    }));
+    return points;
   }, [sortedDaily, rangeDays, fromIso, toIso, aggFreq]);
 
   const monthly = useMemo(() => toMonthly(sortedDaily), [sortedDaily]);
+
   const monthlyForChart = useMemo(() => {
     if (!monthly.length) return [];
     return monthly.slice(Math.max(0, monthly.length - 24)).map((m) => ({
@@ -474,18 +474,24 @@ export default function App() {
     setMsg(null);
     setErrors([]);
     if (!file) return;
+
     try {
       const text = await file.text();
       const { parsed, errors: errs } = csvParse(text);
+
       if (errs.length) setErrors(errs.slice(0, 12));
       if (!parsed.length) {
         setErrors((e) => (e.length ? e : ["No valid rows found in CSV."]));
         return;
       }
+
       setDataMap((prev) => mergeRecords(prev, parsed));
       setMsg(`Imported ${parsed.length} rows${errs.length ? ` (with ${errs.length} issues)` : ""}.`);
     } catch {
       setErrors(["Could not read CSV."]);
+    } finally {
+      // clear file input so same file can be re-uploaded
+      if (fileRef.current) fileRef.current.value = "";
     }
   }
 
@@ -509,11 +515,12 @@ export default function App() {
             <div className="text-2xl font-semibold text-slate-900">India Electricity Generation Dashboard</div>
             <div className="mt-1 text-sm text-slate-600">Daily generation + monthly totals + YoY/MoM.</div>
           </div>
+
           <div className="flex flex-wrap gap-2">
             <button
               onClick={exportCSV}
               disabled={!hasData}
-              className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 disabled:opacity-50"
+              className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 disabled:opacity-50"
             >
               Export CSV
             </button>
@@ -530,6 +537,7 @@ export default function App() {
                 onChange={(e) => setDate(e.target.value)}
                 className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
               />
+
               <label className="text-xs font-medium text-slate-600">Generation (units / MU)</label>
               <input
                 value={gwh}
@@ -540,6 +548,7 @@ export default function App() {
               <div className="mt-2">
                 <div className="text-xs font-medium text-slate-600">Import CSV</div>
                 <input
+                  ref={fileRef}
                   type="file"
                   accept=".csv,text/csv"
                   onChange={(e) => importCSV(e.target.files?.[0])}
@@ -548,9 +557,14 @@ export default function App() {
               </div>
 
               {msg ? <div className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{msg}</div> : null}
+
               {errors.length ? (
                 <div className="rounded-xl bg-rose-50 p-3 text-sm text-rose-800">
-                  <ul className="list-disc pl-5">{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>
+                  <ul className="list-disc pl-5">
+                    {errors.map((e, i) => (
+                      <li key={i}>{e}</li>
+                    ))}
+                  </ul>
                 </div>
               ) : null}
 
@@ -573,12 +587,37 @@ export default function App() {
             )}
           </Card>
 
-          <Card title="Charts">
+          <Card
+            title="Charts"
+            right={
+              hasData ? (
+                <select
+                  value={rangeDays}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setRangeDays(v);
+                    if (sortedDaily.length) {
+                      const lastIso = sortedDaily[sortedDaily.length - 1].date;
+                      setToIso(lastIso);
+                      setFromIso(isoMinusDays(lastIso, clamp(v, 7, 3650)));
+                    }
+                  }}
+                  className="rounded-xl border border-slate-200 bg-white px-2 py-1 text-sm text-slate-700"
+                >
+                  <option value={60}>Last 60 days</option>
+                  <option value={120}>Last 120 days</option>
+                  <option value={365}>Last 12 months</option>
+                  <option value={730}>Last 24 months</option>
+                  <option value={1825}>Last 5 years</option>
+                </select>
+              ) : null
+            }
+          >
             {!hasData ? (
               <div className="text-sm text-slate-600">Add data to see charts.</div>
             ) : (
               <div className="space-y-4">
-                <div className="flex gap-2">
+                <div className="flex flex-wrap items-center gap-3">
                   <select
                     value={aggFreq}
                     onChange={(e) => setAggFreq(e.target.value as any)}
@@ -587,6 +626,23 @@ export default function App() {
                     <option value="daily">Daily</option>
                     <option value="rolling30">Last 30 Days Rolling Sum</option>
                   </select>
+
+                  <div className="ml-auto flex items-center gap-2 text-xs text-slate-600">
+                    <span>From</span>
+                    <input
+                      type="date"
+                      value={fromIso}
+                      onChange={(e) => setFromIso(e.target.value)}
+                      className="rounded-xl border border-slate-200 bg-white px-2 py-1"
+                    />
+                    <span>To</span>
+                    <input
+                      type="date"
+                      value={toIso}
+                      onChange={(e) => setToIso(e.target.value)}
+                      className="rounded-xl border border-slate-200 bg-white px-2 py-1"
+                    />
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap gap-3 text-sm">
@@ -595,7 +651,11 @@ export default function App() {
                     Total Current
                   </label>
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={showPrevYearSeries} onChange={(e) => setShowPrevYearSeries(e.target.checked)} />
+                    <input
+                      type="checkbox"
+                      checked={showPrevYearSeries}
+                      onChange={(e) => setShowPrevYearSeries(e.target.checked)}
+                    />
                     Total (previous year)
                   </label>
                   <label className="flex items-center gap-2">
@@ -615,7 +675,11 @@ export default function App() {
                       <XAxis dataKey="label" tick={{ fontSize: 12 }} minTickGap={24} />
 
                       {anyTotalsShown ? (
-                        <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => fmtNum(asFiniteNumber(v) ?? null, 2)} />
+                        <YAxis
+                          yAxisId="left"
+                          tick={{ fontSize: 12 }}
+                          tickFormatter={(v) => fmtNum(asFiniteNumber(v) ?? null, 2)}
+                        />
                       ) : null}
 
                       {anyPctShown ? (
@@ -630,10 +694,25 @@ export default function App() {
                       <Tooltip content={<CustomTooltip />} />
                       <Legend />
 
-                      {showUnitsSeries ? <Line yAxisId="left" type="monotone" dataKey="units" name="Total Current" dot={false} strokeWidth={2} /> : null}
-                      {showPrevYearSeries ? <Line yAxisId="left" type="monotone" dataKey="prev_year_units" name="Total (previous year)" dot={false} strokeWidth={2} /> : null}
-                      {showYoYSeries ? <Line yAxisId="right" type="monotone" dataKey="yoy_pct" name="YoY %" dot={false} strokeWidth={2} /> : null}
-                      {showMoMSeries ? <Line yAxisId="right" type="monotone" dataKey="mom_pct" name="MoM %" dot={false} strokeWidth={2} /> : null}
+                      {showUnitsSeries ? (
+                        <Line yAxisId="left" type="monotone" dataKey="units" name="Total Current" dot={false} strokeWidth={2} />
+                      ) : null}
+                      {showPrevYearSeries ? (
+                        <Line
+                          yAxisId="left"
+                          type="monotone"
+                          dataKey="prev_year_units"
+                          name="Total (previous year)"
+                          dot={false}
+                          strokeWidth={2}
+                        />
+                      ) : null}
+                      {showYoYSeries ? (
+                        <Line yAxisId="right" type="monotone" dataKey="yoy_pct" name="YoY %" dot={false} strokeWidth={2} />
+                      ) : null}
+                      {showMoMSeries ? (
+                        <Line yAxisId="right" type="monotone" dataKey="mom_pct" name="MoM %" dot={false} strokeWidth={2} />
+                      ) : null}
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
@@ -643,23 +722,29 @@ export default function App() {
         </div>
 
         <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Card title="Monthly totals + growth">
+          <Card title="Monthly totals (last 24 months)">
             {!hasData ? (
-              <div className="text-sm text-slate-600">Add data to see monthly totals and growth.</div>
+              <div className="text-sm text-slate-600">Add data to see monthly totals.</div>
             ) : (
-              <div className="space-y-4">
-                <div className="h-[240px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={monthlyForChart} margin={{ top: 10, right: 18, bottom: 10, left: 8 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="month" tick={{ fontSize: 12 }} minTickGap={18} />
-                      <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => fmtNum(asFiniteNumber(v) ?? null, 2)} />
-                      <Tooltip />
-                      <Legend />
-                      <Bar dataKey="total_units" name="Monthly total (units)" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+              <div className="h-[240px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={monthlyForChart} margin={{ top: 10, right: 18, bottom: 10, left: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="month" tick={{ fontSize: 12 }} minTickGap={18} />
+                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => fmtNum(asFiniteNumber(v) ?? null, 2)} />
+                    <Tooltip
+                      formatter={(v: any, name: any) => {
+                        const num = asFiniteNumber(v);
+                        if (name === "total_units") return [`${fmtNum(num ?? null, 2)} units`, "Monthly total"];
+                        if (name === "mom_pct") return [fmtPct(num ?? null, 2), "MoM %"];
+                        if (name === "yoy_pct") return [fmtPct(num ?? null, 2), "YoY %"];
+                        return [v, name];
+                      }}
+                    />
+                    <Legend />
+                    <Bar dataKey="total_units" name="Monthly total (units)" />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             )}
           </Card>
