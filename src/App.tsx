@@ -357,7 +357,7 @@ export default function App() {
   const [showYoYSeries, setShowYoYSeries] = useState(true);
   const [showMoMSeries, setShowMoMSeries] = useState(true);
 
-  const fileRef = useRef noting<File>();
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const sortedDaily = useMemo<DailyPoint[]>(() => {
     return Array.from(dataMap.entries())
